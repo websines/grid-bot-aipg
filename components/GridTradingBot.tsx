@@ -36,6 +36,9 @@ interface GridStatus {
   status: string;
   last_update: string;
   params: GridParams;
+  current_price: number;
+  balance: Balance;
+  open_orders: Order[];
 }
 
 export default function GridTradingBot() {
@@ -131,13 +134,29 @@ export default function GridTradingBot() {
     }
   };
 
+  const handleStatusUpdate = (data: any) => {
+    if (data.status === 'running' && data.grid_state) {
+      setIsRunning(true);
+      setGridStatus(data.grid_state);
+      setCurrentPrice(data.grid_state.current_price);
+      if (data.grid_state.balance) {
+        setBalances(data.grid_state.balance);
+      }
+      if (data.grid_state.open_orders) {
+        setOpenOrders(data.grid_state.open_orders);
+      }
+    } else {
+      setIsRunning(false);
+      setGridStatus(null);
+    }
+  };
+
   const fetchGridStatus = async () => {
     try {
       const response = await fetch('http://localhost:8000/api/grid/status');
       const data = await response.json();
       console.log('Grid status:', data);
-      setGridStatus(data);
-      setIsRunning(data.status === 'running');
+      handleStatusUpdate(data);
     } catch (error) {
       console.error('Error fetching grid status:', error);
     }
@@ -162,8 +181,8 @@ export default function GridTradingBot() {
         throw new Error(data.detail || 'Failed to create grid');
       }
 
-      setIsRunning(true);
-      await Promise.all([fetchOpenOrders(), fetchGridStatus()]);
+      handleStatusUpdate(data);
+      await fetchOpenOrders();
     } catch (error) {
       console.error('Error creating grid:', error);
       setError(error instanceof Error ? error.message : 'Failed to create grid');
@@ -236,13 +255,13 @@ export default function GridTradingBot() {
           </div>
         )}
 
-        {gridStatus?.status === 'running' && (
+        {gridStatus && (
           <div className="bg-gray-700 rounded p-4 mb-4">
             <h3 className="text-lg mb-2">Grid Status</h3>
             <div className="grid grid-cols-2 gap-4 text-sm">
               <div>
-                <p className="text-gray-400">Last Update</p>
-                <p>{new Date(gridStatus.last_update).toLocaleString()}</p>
+                <p className="text-gray-400">Current Price</p>
+                <p>{gridStatus.current_price ? `${gridStatus.current_price} USDT` : 'N/A'}</p>
               </div>
               <div>
                 <p className="text-gray-400">Total Amount</p>
@@ -255,6 +274,14 @@ export default function GridTradingBot() {
               <div>
                 <p className="text-gray-400">Distance Range</p>
                 <p>{gridStatus.params.min_distance}% - {gridStatus.params.max_distance}%</p>
+              </div>
+              <div>
+                <p className="text-gray-400">Last Update</p>
+                <p>{new Date(gridStatus.last_update).toLocaleString()}</p>
+              </div>
+              <div>
+                <p className="text-gray-400">Open Orders</p>
+                <p>{gridStatus.open_orders?.length || 0}</p>
               </div>
             </div>
           </div>
