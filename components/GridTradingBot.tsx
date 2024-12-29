@@ -2,14 +2,6 @@
 
 import { useState, useEffect } from 'react';
 
-interface GridParams {
-  symbol: string;
-  positions: number;
-  total_amount: number;
-  min_distance: number;
-  max_distance: number;
-}
-
 interface Balance {
   currency: string;
   availableAmount: string;
@@ -28,8 +20,12 @@ interface Order {
   state: string;
 }
 
-interface MarketInfo {
+interface GridParams {
   symbol: string;
+  positions: number;
+  total_amount: number;
+  min_distance: number;
+  max_distance: number;
 }
 
 interface GridStatus {
@@ -61,156 +57,65 @@ interface SortConfig {
   direction: 'asc' | 'desc';
 }
 
+interface GridStatusResponse {
+  is_running: boolean;
+  grid_status: GridStatus;
+}
+
 export default function GridTradingBot() {
   const [balances, setBalances] = useState<Balance | null>(null);
   const [openOrders, setOpenOrders] = useState<Order[]>([]);
   const [gridParams, setGridParams] = useState<GridParams>({
-    symbol: 'AIPG_USDT',
-    positions: 20,
-    total_amount: 200,
+    symbol: 'BTCUSDT',
+    positions: 5,
+    total_amount: 100,
     min_distance: 0.5,
     max_distance: 10,
   });
   const [isRunning, setIsRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [marketInfo, setMarketInfo] = useState<MarketInfo | null>(null);
-  const [currentPrice, setCurrentPrice] = useState<number | null>(null);
   const [gridStatus, setGridStatus] = useState<GridStatus | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
-  const [loadingMessage, setLoadingMessage] = useState<string>('');
   const [operationInProgress, setOperationInProgress] = useState<'create' | 'stop' | ''>('');
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage] = useState(5);
   const [sortConfig, setSortConfig] = useState<SortConfig>({ key: 'price', direction: 'desc' });
-  const [filterSide, setFilterSide] = useState<'ALL' | 'BUY' | 'SELL'>('ALL');
-  const [filterStatus, setFilterStatus] = useState<string>('ALL');
+  const [filterSide] = useState<'ALL' | 'BUY' | 'SELL'>('ALL');
+  const [filterStatus] = useState<string>('ALL');
 
   useEffect(() => {
-    fetchInitialData();
-    const statusInterval = setInterval(fetchGridStatus, 30 * 1000);
+    void fetchInitialData();
+    const statusInterval = setInterval(() => void fetchGridStatus(), 30 * 1000);
     return () => clearInterval(statusInterval);
   }, []);
 
   const fetchInitialData = async () => {
-    setIsLoading(true);
-    setLoadingMessage('Loading grid data...');
     try {
-      try {
-        await fetchBalances();
-      } catch (error) {
-        console.error('Error fetching balances:', error);
-      }
+      setError(null);
       
-      try {
-        await fetchOpenOrders();
-      } catch (error) {
-        console.error('Error fetching orders:', error);
-      }
-      
-      try {
-        await fetchMarketInfo();
-      } catch (error) {
-        console.error('Error fetching market info:', error);
-      }
-      
-      try {
-        await fetchGridStatus();
-      } catch (error) {
-        console.error('Error fetching grid status:', error);
-      }
-    } catch (error) {
-      console.error('Error in fetchInitialData:', error);
-      setError('Some data could not be loaded. The grid bot may still be functional.');
-    } finally {
-      setIsLoading(false);
-      setLoadingMessage('');
-    }
-  };
-
-  const fetchBalances = async () => {
-    try {
-      setLoadingMessage('Fetching balances...');
-      const response = await fetch('http://localhost:8000/api/balance/usdt');
+      const response = await fetch('http://localhost:8000/api/grid/status');
       if (!response.ok) {
-        throw new Error('Failed to fetch balances');
+        const errorData = await response.json();
+        throw new Error(errorData.detail || 'Failed to fetch grid status');
       }
-      const data = await response.json();
-      setBalances(data);
-    } catch (error) {
-      console.error('Error fetching balances:', error);
-      setBalances(null);
-      throw error;
-    }
-  };
 
-  const fetchOpenOrders = async () => {
-    try {
-      setLoadingMessage('Fetching orders...');
-      const response = await fetch(`http://localhost:8000/api/orders/${gridParams.symbol}`);
-      if (!response.ok) {
-        throw new Error('Failed to fetch orders');
-      }
       const data = await response.json();
-      setOpenOrders(Array.isArray(data) ? data : []);
-    } catch (error) {
-      console.error('Error fetching open orders:', error);
-      setOpenOrders([]);
-      throw error;
-    }
-  };
-
-  const fetchMarketInfo = async () => {
-    try {
-      setLoadingMessage('Fetching market info...');
-      const response = await fetch(`http://localhost:8000/api/market-info/${gridParams.symbol}`);
-      if (!response.ok) {
-        const data = await response.json();
-        throw new Error(data.detail || 'Failed to fetch market info');
-      }
-      const data = await response.json();
-      setMarketInfo(data);
+      handleStatusUpdate(data);
       
-      const priceResponse = await fetch(`http://localhost:8000/api/market-price/${gridParams.symbol}`);
-      if (!priceResponse.ok) {
-        throw new Error('Failed to fetch market price');
-      }
-      const priceData = await priceResponse.json();
-      
-      if (priceData.price) {
-        setCurrentPrice(priceData.price);
+      if (data.grid_status) {
+        if (data.grid_status.balance) {
+          setBalances(data.grid_status.balance);
+        }
+        if (data.grid_status.open_orders) {
+          setOpenOrders(data.grid_status.open_orders);
+        }
       }
     } catch (error) {
-      console.error('Error fetching market info:', error);
-      setError(error instanceof Error ? error.message : 'Failed to fetch market info');
-      throw error;
-    }
-  };
-
-  const handleStatusUpdate = (data: any) => {
-    if (data.grid_status) {
-      setIsRunning(data.is_running);
-      setGridStatus(data.grid_status);
-      if (data.grid_status.current_price) {
-        setCurrentPrice(data.grid_status.current_price);
-      }
-      if (data.grid_status.balance) {
-        setBalances(data.grid_status.balance);
-      }
-      if (data.grid_status.open_orders) {
-        setOpenOrders(data.grid_status.open_orders);
-      }
-    } else {
-      setIsRunning(false);
-      setGridStatus(null);
+      console.error('Error fetching initial data:', error);
+      setError(error instanceof Error ? error.message : 'Failed to fetch initial data');
     }
   };
 
   const fetchGridStatus = async () => {
-    const isInitialLoad = !gridStatus;
-    if (isInitialLoad) {
-      setLoadingMessage('Checking grid status...');
-    }
-    
     try {
       const response = await fetch('http://localhost:8000/api/grid/status');
       if (!response.ok) {
@@ -218,15 +123,19 @@ export default function GridTradingBot() {
       }
       const data = await response.json();
       handleStatusUpdate(data);
-      
-      if (error && error.includes('grid status')) {
-        setError(null);
-      }
     } catch (error) {
       console.error('Error fetching grid status:', error);
-      if (error instanceof Error && !error.message.includes('Failed to fetch')) {
-        setError('Failed to fetch grid status. The connection to the server might be lost.');
-      }
+      setError(error instanceof Error ? error.message : 'Failed to fetch grid status');
+    }
+  };
+
+  const handleStatusUpdate = (data: GridStatusResponse) => {
+    if (data.grid_status) {
+      setIsRunning(data.is_running);
+      setGridStatus(data.grid_status);
+    } else {
+      setIsRunning(false);
+      setGridStatus(null);
     }
   };
 
@@ -243,40 +152,17 @@ export default function GridTradingBot() {
         body: JSON.stringify(gridParams),
       });
 
-      const data = await response.json();
-      console.log('Grid creation response:', data);
-
       if (!response.ok) {
-        throw new Error(data.detail || 'Failed to create grid');
+        const errorData = await response.json();
+        throw new Error(errorData.detail || 'Failed to create grid');
       }
 
+      const data = await response.json();
       handleStatusUpdate(data);
-      await fetchOpenOrders();
     } catch (error) {
       console.error('Error creating grid:', error);
       setError(error instanceof Error ? error.message : 'Failed to create grid');
       setIsRunning(false);
-    } finally {
-      setOperationInProgress('');
-    }
-  };
-
-  const cancelGrid = async () => {
-    try {
-      setOperationInProgress('stop');
-      const response = await fetch(`http://localhost:8000/api/grid/${gridParams.symbol}`, {
-        method: 'DELETE',
-      });
-
-      if (!response.ok) {
-        throw new Error('Failed to cancel grid');
-      }
-
-      setIsRunning(false);
-      await fetchOpenOrders();
-    } catch (error) {
-      console.error('Error canceling grid:', error);
-      setError(error instanceof Error ? error.message : 'Failed to cancel grid');
     } finally {
       setOperationInProgress('');
     }
@@ -305,7 +191,7 @@ export default function GridTradingBot() {
     }
   };
 
-  const sortAndFilterOrders = (orders: Order[]) => {
+  const sortAndFilterOrders = (orders: Order[]): Order[] => {
     let filteredOrders = [...orders];
     
     if (filterSide !== 'ALL') {
@@ -368,7 +254,7 @@ export default function GridTradingBot() {
                   <button
                     onClick={stopGrid}
                     disabled={operationInProgress !== ''}
-                    className="px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2"
+                    className="px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center space-x-2"
                   >
                     {operationInProgress === 'stop' ? (
                       <>
@@ -378,7 +264,7 @@ export default function GridTradingBot() {
                     ) : (
                       <>
                         <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
-                          <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8 7a1 1 0 00-1 1v4a1 1 0 002 0V8a1 1 0 00-1-1zm4 0a1 1 0 00-1 1v4a1 1 0 002 0V8a1 1 0 00-1-1z" clipRule="evenodd" />
+                          <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z" clipRule="evenodd" />
                         </svg>
                         <span>Stop Bot</span>
                       </>
