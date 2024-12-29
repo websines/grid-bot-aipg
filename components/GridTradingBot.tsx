@@ -63,6 +63,8 @@ interface GridStatusResponse {
 }
 
 export default function GridTradingBot() {
+  const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+  
   const [balances, setBalances] = useState<Balance | null>(null);
   const [openOrders, setOpenOrders] = useState<Order[]>([]);
   const [gridParams, setGridParams] = useState<GridParams>({
@@ -92,7 +94,7 @@ export default function GridTradingBot() {
     try {
       setError(null);
       
-      const response = await fetch('http://localhost:8000/api/grid/status');
+      const response = await fetch(`${API_BASE_URL}/api/grid/status`);
       if (!response.ok) {
         const errorData = await response.json();
         throw new Error(errorData.detail || 'Failed to fetch grid status');
@@ -117,7 +119,7 @@ export default function GridTradingBot() {
 
   const fetchGridStatus = async () => {
     try {
-      const response = await fetch('http://localhost:8000/api/grid/status');
+      const response = await fetch(`${API_BASE_URL}/api/grid/status`);
       if (!response.ok) {
         throw new Error('Failed to fetch grid status');
       }
@@ -144,7 +146,7 @@ export default function GridTradingBot() {
       setError(null);
       setOperationInProgress('create');
       console.log('Creating grid with params:', gridParams);
-      const response = await fetch('http://localhost:8000/api/grid/create', {
+      const response = await fetch(`${API_BASE_URL}/api/grid/create`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -173,7 +175,7 @@ export default function GridTradingBot() {
       setOperationInProgress('stop');
       setError(null);
       
-      const response = await fetch('http://localhost:8000/api/grid/stop', {
+      const response = await fetch(`${API_BASE_URL}/api/grid/stop`, {
         method: 'POST',
       });
       
