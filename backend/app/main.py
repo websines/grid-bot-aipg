@@ -3,13 +3,16 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional, List
 import asyncio
-from datetime import datetime
+from datetime import datetime, timedelta
 import os
 from dotenv import load_dotenv
 import logging
 from sqlalchemy.orm import Session
 from .exchange import Exchange
-from .database import get_db, save_grid_state, get_active_grid, stop_active_grid
+from .database import (
+    get_db, init_db, GridState, Trade, GridStats,
+    save_grid_state, get_active_grid, stop_active_grid
+)
 from .config import DEFAULT_GRID_CONFIG
 
 # Load environment variables
@@ -195,8 +198,27 @@ async def create_grid(grid_params: GridParams, background_tasks: BackgroundTasks
         balance = await exchange.get_balance("usdt")
         open_orders = await exchange.get_open_orders(grid_params.symbol)
         
+        # Calculate grid prices
+        upper_price = current_price * (1 + grid_params.max_distance / 100)
+        lower_price = current_price * (1 - grid_params.min_distance / 100)
+        grid_spread_pct = ((upper_price - lower_price) / lower_price) * 100
+        avg_grid_distance = grid_spread_pct / (grid_params.positions - 1)
+        
         # Save initial state
         grid_state = save_grid_state(db, grid_params, current_price, open_orders, balance)
+        grid_state.is_running = True
+        grid_state.upper_price = upper_price
+        grid_state.lower_price = lower_price
+        db.commit()
+        
+        # Initialize grid stats
+        stats = GridStats(
+            grid_id=grid_state.id,
+            start_time=datetime.utcnow(),
+            status="active"
+        )
+        db.add(stats)
+        db.commit()
         
         # Start the background tasks if not already running
         if grid_update_task is None:
@@ -215,19 +237,177 @@ async def create_grid(grid_params: GridParams, background_tasks: BackgroundTasks
             balance_update_task = True
         
         return {
-            "status": "running",
-            "grid_state": {
-                "status": "running",
-                "params": grid_params,
+            "status": "success",
+            "grid_status": {
+                "is_running": True,
+                "symbol": grid_params.symbol,
+                "positions": grid_params.positions,
+                "total_amount": grid_params.total_amount,
+                "min_distance": grid_params.min_distance,
+                "max_distance": grid_params.max_distance,
+                "upper_price": upper_price,
+                "lower_price": lower_price,
+                "grid_spread": grid_spread_pct,
+                "avg_distance": avg_grid_distance,
                 "current_price": current_price,
                 "open_orders": open_orders,
                 "balance": balance,
-                "last_update": datetime.now().isoformat()
+                "created_at": grid_state.created_at.isoformat(),
+                "updated_at": grid_state.updated_at.isoformat(),
+                "stats": {
+                    "total_trades": 0,
+                    "total_volume": 0,
+                    "total_fees": 0,
+                    "realized_pnl": 0
+                }
             }
         }
         
     except Exception as e:
         logger.error(f"Error creating grid: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/grid/status")
+async def get_grid_status(db: Session = Depends(get_db)):
+    try:
+        grid = get_active_grid(db)
+        if not grid:
+            return {
+                "is_running": False,
+                "grid_status": None
+            }
+
+        stats = db.query(GridStats).filter(GridStats.grid_id == grid.id).first()
+        
+        # Get current market data
+        current_price = await exchange.get_market_price(grid.symbol)
+        open_orders = await exchange.get_open_orders(grid.symbol)
+        balance = await exchange.get_balance("usdt")
+
+        return {
+            "is_running": True,
+            "grid_status": {
+                "symbol": grid.symbol,
+                "positions": grid.positions,
+                "total_amount": grid.total_amount,
+                "min_distance": grid.min_distance,
+                "max_distance": grid.max_distance,
+                "current_price": current_price,
+                "open_orders": open_orders,
+                "balance": balance,
+                "created_at": grid.created_at.isoformat(),
+                "updated_at": grid.updated_at.isoformat(),
+                "stats": {
+                    "total_trades": stats.total_trades if stats else 0,
+                    "total_volume": stats.total_volume if stats else 0,
+                    "total_fees": stats.total_fees if stats else 0,
+                    "realized_pnl": stats.realized_pnl if stats else 0
+                }
+            }
+        }
+    except Exception as e:
+        logger.error(f"Error getting grid status: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/trade")
+async def record_trade(
+    order_id: str,
+    symbol: str,
+    side: str,
+    price: float,
+    quantity: float,
+    fee: float = 0.0,
+    fee_asset: str = "USDT",
+    db: Session = Depends(get_db)
+):
+    try:
+        grid = get_active_grid(db)
+        if not grid:
+            raise HTTPException(status_code=404, detail="No active grid found")
+
+        quote_quantity = price * quantity
+        
+        # Calculate realized PnL for SELL orders
+        realized_pnl = 0
+        if side == "SELL":
+            # Find the corresponding BUY order with the closest price
+            buy_trade = db.query(Trade).filter(
+                Trade.grid_id == grid.id,
+                Trade.side == "BUY",
+                Trade.price < price
+            ).order_by(Trade.price.desc()).first()
+            
+            if buy_trade:
+                # Calculate profit/loss
+                realized_pnl = (price - buy_trade.price) * min(quantity, buy_trade.quantity)
+                realized_pnl -= fee  # Subtract trading fee
+
+        # Record the trade
+        trade = Trade(
+            order_id=order_id,
+            symbol=symbol,
+            side=side,
+            price=price,
+            quantity=quantity,
+            quote_quantity=quote_quantity,
+            realized_pnl=realized_pnl,
+            fee=fee,
+            fee_asset=fee_asset,
+            grid_id=grid.id
+        )
+        db.add(trade)
+
+        # Update grid stats
+        stats = db.query(GridStats).filter(GridStats.grid_id == grid.id).first()
+        if stats:
+            stats.total_trades += 1
+            stats.total_volume += quote_quantity
+            stats.total_fees += fee
+            stats.realized_pnl += realized_pnl
+            stats.last_updated = datetime.utcnow()
+
+        db.commit()
+        return {"status": "success", "trade_id": trade.id}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/stats/summary")
+async def get_stats_summary(
+    period: Optional[str] = "all",  # all, day, week, month
+    db: Session = Depends(get_db)
+):
+    try:
+        query = db.query(GridStats)
+        
+        if period != "all":
+            time_filters = {
+                "day": timedelta(days=1),
+                "week": timedelta(days=7),
+                "month": timedelta(days=30)
+            }
+            if period in time_filters:
+                start_time = datetime.utcnow() - time_filters[period]
+                query = query.filter(GridStats.start_time >= start_time)
+
+        stats = query.all()
+        
+        total_trades = sum(stat.total_trades for stat in stats)
+        total_volume = sum(stat.total_volume for stat in stats)
+        total_fees = sum(stat.total_fees for stat in stats)
+        total_pnl = sum(stat.realized_pnl for stat in stats)
+        
+        return {
+            "period": period,
+            "summary": {
+                "total_trades": total_trades,
+                "total_volume": total_volume,
+                "total_fees": total_fees,
+                "total_pnl": total_pnl,
+                "net_profit": total_pnl - total_fees
+            }
+        }
+    except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/grid/stop")
