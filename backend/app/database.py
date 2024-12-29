@@ -1,18 +1,54 @@
-from sqlalchemy import create_engine, Column, Integer, Float, String, DateTime, Boolean, JSON
+from sqlalchemy import create_engine, Column, Integer, Float, String, DateTime, Boolean, JSON, text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 from datetime import datetime
 import json
+import os
+import logging
+from fastapi import HTTPException
+
+# Set up logging
+logger = logging.getLogger(__name__)
 
 # Create SQLite database engine
 SQLALCHEMY_DATABASE_URL = "sqlite:///./grid_bot.db"
-engine = create_engine(SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False})
 
-# Create session factory
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+def init_db():
+    """Initialize database and create tables if they don't exist"""
+    try:
+        # Ensure the database directory exists
+        db_dir = os.path.dirname(os.path.abspath("./grid_bot.db"))
+        os.makedirs(db_dir, exist_ok=True)
+        
+        # Create tables
+        Base.metadata.create_all(bind=engine)
+        logger.info("Database initialized successfully")
+    except Exception as e:
+        logger.error(f"Failed to initialize database: {str(e)}")
+        raise
+
+# Create engine with better error handling
+try:
+    engine = create_engine(
+        SQLALCHEMY_DATABASE_URL, 
+        connect_args={
+            "check_same_thread": False,
+            "timeout": 30  # Add timeout for busy database
+        }
+    )
+except Exception as e:
+    logger.error(f"Failed to create database engine: {str(e)}")
+    raise
 
 # Create base class for models
 Base = declarative_base()
+
+# Create session factory
+SessionLocal = sessionmaker(
+    autocommit=False, 
+    autoflush=False, 
+    bind=engine
+)
 
 class GridState(Base):
     __tablename__ = "grid_states"
@@ -45,14 +81,22 @@ class GridState(Base):
             "balance": json.loads(self.balance) if self.balance else {}
         }
 
-# Create database tables
-Base.metadata.create_all(bind=engine)
+# Initialize database
+init_db()
 
-# Dependency to get database session
+# Dependency to get database session with better error handling
 def get_db():
     db = SessionLocal()
     try:
+        # Test the connection using SQLAlchemy's text() function
+        db.execute(text("SELECT 1"))
         yield db
+    except Exception as e:
+        logger.error(f"Database connection error: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail="Database connection error. Please try again later."
+        )
     finally:
         db.close()
 
