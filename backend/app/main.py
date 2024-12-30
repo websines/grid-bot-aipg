@@ -132,7 +132,7 @@ async def update_grid_orders():
                 # Calculate grid parameters
                 amount_per_grid = grid_state.total_amount / grid_state.positions
                 min_profit_margin = 0.002  # 0.2% minimum profit margin
-                max_orders_per_side = grid_state.positions // 2  # Split orders between buy and sell
+                price_step = 0.001  # 0.1% step between each order
                 
                 # Get current order book to place orders near the market
                 order_book = await exchange.get_order_book(grid_state.symbol)
@@ -144,31 +144,31 @@ async def update_grid_orders():
                 best_bid = float(order_book['bids'][0][0]) if order_book['bids'] else current_price * 0.999
                 best_ask = float(order_book['asks'][0][0]) if order_book['asks'] else current_price * 1.001
                 
-                # Calculate tight spread around market price
-                spread = (best_ask - best_bid) / best_bid
-                grid_step = max(min_profit_margin, spread / max_orders_per_side)
+                # Use best ask as our starting point
+                base_price = best_ask
                 
                 # Cancel existing orders
                 await exchange.cancel_all_orders(grid_state.symbol)
                 
                 try:
-                    # Place buy orders slightly below best bid
-                    for i in range(max_orders_per_side):
-                        buy_price = best_bid * (1 - grid_step * i)
-                        buy_quantity = amount_per_grid / buy_price
+                    # Create pairs of buy and sell orders, all above current price
+                    for i in range(grid_state.positions):
+                        # Calculate price for this grid level
+                        # Each level is price_step (0.1%) above the previous one
+                        grid_price = base_price * (1 + price_step * i)
                         
+                        # Place buy order at grid price
+                        buy_quantity = amount_per_grid / grid_price
                         await exchange.place_grid_orders(
                             symbol=grid_state.symbol,
-                            price=buy_price,
+                            price=grid_price,
                             quantity=buy_quantity,
                             side='BUY'
                         )
-                    
-                    # Place sell orders slightly above best ask
-                    for i in range(max_orders_per_side):
-                        sell_price = best_ask * (1 + grid_step * i)
-                        sell_quantity = amount_per_grid / sell_price
                         
+                        # Place sell order slightly above buy price
+                        sell_price = grid_price * (1 + min_profit_margin)  # 0.2% above buy price
+                        sell_quantity = amount_per_grid / sell_price
                         await exchange.place_grid_orders(
                             symbol=grid_state.symbol,
                             price=sell_price,
