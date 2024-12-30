@@ -20,10 +20,7 @@ def init_db():
         db_dir = os.path.dirname(os.path.abspath("./grid_bot.db"))
         os.makedirs(db_dir, exist_ok=True)
         
-        # Drop all tables if they exist
-        Base.metadata.drop_all(bind=engine)
-        
-        # Create tables
+        # Create tables if they don't exist
         Base.metadata.create_all(bind=engine)
         logger.info("Database initialized successfully")
     except Exception as e:

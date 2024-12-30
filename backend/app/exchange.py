@@ -1,5 +1,6 @@
 from pyxt.spot import Spot
 import logging
+import aiohttp
 
 logger = logging.getLogger(__name__)
 
@@ -102,28 +103,57 @@ class Exchange:
             raise Exception(f"Failed to get market price: {str(e)}")
 
     async def place_grid_orders(self, symbol: str, price: float, quantity: float, side: str):
-        """Place a limit order"""
+        """Place a grid order"""
         try:
-            logger.info(f"Placing {side} order for {symbol} at {price} with quantity {quantity}")
+            logger.info(f"Placing {side} order: {quantity} {symbol} @ {price}")
             
-            # Round price and quantity to appropriate decimals
-            price = round(price, 6)  # 6 decimals for price
-            quantity = round(quantity, 2)  # 2 decimals for quantity
-            
-            logger.info(f"Rounded values: price={price}, quantity={quantity}")
-            
-            response = self.client.order(
+            # Place the order
+            order = self.client.create_order(
                 symbol=symbol.lower(),
-                price=price,
-                quantity=quantity,
-                side=side.upper(),
-                type='LIMIT'
+                side=side.lower(),
+                type="limit",
+                price=str(price),
+                quantity=str(quantity)
             )
-            logger.info(f"Order response: {response}")
-            return response
+            logger.info(f"Order response: {order}")
+            
+            # Check if order was filled immediately
+            if order and order.get('status') == 'filled':
+                # Record the trade
+                await self._record_trade(order)
+            
+            return order
         except Exception as e:
-            logger.error(f"Error placing order: {str(e)}")
-            raise Exception(f"Failed to place {side} order: {str(e)}")
+            logger.error(f"Error placing grid order: {str(e)}")
+            return None
+
+    async def _record_trade(self, order):
+        """Record a filled trade"""
+        try:
+            # Extract order details
+            order_id = order.get('orderId')
+            symbol = order.get('symbol', '').upper()
+            side = order.get('side', '').upper()
+            price = float(order.get('price', 0))
+            quantity = float(order.get('executedQty', 0))
+            fee = float(order.get('fee', 0))
+            
+            # Call the record trade endpoint
+            async with aiohttp.ClientSession() as session:
+                async with session.post('http://localhost:8000/api/trade', json={
+                    'order_id': order_id,
+                    'symbol': symbol,
+                    'side': side,
+                    'price': price,
+                    'quantity': quantity,
+                    'fee': fee
+                }) as response:
+                    if response.status != 200:
+                        logger.error(f"Failed to record trade: {await response.text()}")
+                    else:
+                        logger.info(f"Successfully recorded trade for order {order_id}")
+        except Exception as e:
+            logger.error(f"Error recording trade: {str(e)}")
 
     async def get_open_orders(self, symbol: str = "aipg_usdt"):
         """Get all open orders for a symbol"""
