@@ -129,69 +129,55 @@ async def update_grid_orders():
                     max_distance=grid_state.max_distance
                 ), current_price, open_orders, balance)
                 
-                # Cancel existing orders
-                await exchange.cancel_all_orders(grid_state.symbol)
-                logger.info("Cancelled existing orders")
-                
                 # Calculate grid parameters
                 amount_per_grid = grid_state.total_amount / grid_state.positions
-                price_step = (grid_state.max_distance - grid_state.min_distance) / (grid_state.positions - 1)
                 min_profit_margin = 0.002  # 0.2% minimum profit margin
+                max_orders_per_side = grid_state.positions // 2  # Split orders between buy and sell
                 
-                # Get filled orders to determine position
-                filled_orders = await exchange.get_filled_orders(grid_state.symbol)
-                net_position = sum(
-                    float(order['quantity']) if order['side'] == 'BUY' else -float(order['quantity'])
-                    for order in filled_orders
-                )
+                # Get current order book to place orders near the market
+                order_book = await exchange.get_order_book(grid_state.symbol)
+                if not order_book or 'bids' not in order_book or 'asks' not in order_book:
+                    logger.error("Could not get order book")
+                    return
                 
-                # Place new grid orders around current price
-                for i in range(grid_state.positions):
-                    try:
-                        distance = grid_state.min_distance + (price_step * i)
+                # Get best bid and ask prices
+                best_bid = float(order_book['bids'][0][0]) if order_book['bids'] else current_price * 0.999
+                best_ask = float(order_book['asks'][0][0]) if order_book['asks'] else current_price * 1.001
+                
+                # Calculate tight spread around market price
+                spread = (best_ask - best_bid) / best_bid
+                grid_step = max(min_profit_margin, spread / max_orders_per_side)
+                
+                # Cancel existing orders
+                await exchange.cancel_all_orders(grid_state.symbol)
+                
+                try:
+                    # Place buy orders slightly below best bid
+                    for i in range(max_orders_per_side):
+                        buy_price = best_bid * (1 - grid_step * i)
+                        buy_quantity = amount_per_grid / buy_price
                         
-                        # Calculate buy and sell prices based on current market price
-                        buy_price = current_price * (1 - distance / 100)
-                        sell_price = buy_price * (1 + min_profit_margin)  # Ensure minimum profit margin
+                        await exchange.place_grid_orders(
+                            symbol=grid_state.symbol,
+                            price=buy_price,
+                            quantity=buy_quantity,
+                            side='BUY'
+                        )
+                    
+                    # Place sell orders slightly above best ask
+                    for i in range(max_orders_per_side):
+                        sell_price = best_ask * (1 + grid_step * i)
+                        sell_quantity = amount_per_grid / sell_price
                         
-                        # Place initial orders or orders based on position
-                        if not filled_orders:  # If no trades yet, place both buy and sell orders
-                            # Place buy order
-                            await exchange.place_grid_orders(
-                                symbol=grid_state.symbol,
-                                price=buy_price,
-                                quantity=amount_per_grid / buy_price,
-                                side='BUY'
-                            )
-                            
-                            # Place sell order slightly above buy price
-                            await exchange.place_grid_orders(
-                                symbol=grid_state.symbol,
-                                price=sell_price,
-                                quantity=amount_per_grid / sell_price,
-                                side='SELL'
-                            )
-                        else:
-                            # Only place buy orders if we have sold previously or have no position
-                            if net_position <= 0:
-                                await exchange.place_grid_orders(
-                                    symbol=grid_state.symbol,
-                                    price=buy_price,
-                                    quantity=amount_per_grid / buy_price,
-                                    side='BUY'
-                                )
-                            
-                            # Only place sell orders if we have bought previously or have position
-                            if net_position >= 0:
-                                await exchange.place_grid_orders(
-                                    symbol=grid_state.symbol,
-                                    price=sell_price,
-                                    quantity=amount_per_grid / sell_price,
-                                    side='SELL'
-                                )
+                        await exchange.place_grid_orders(
+                            symbol=grid_state.symbol,
+                            price=sell_price,
+                            quantity=sell_quantity,
+                            side='SELL'
+                        )
                         
-                    except Exception as e:
-                        logger.error(f"Error placing grid orders at level {i}: {str(e)}")
+                except Exception as e:
+                    logger.error(f"Error placing grid orders: {str(e)}")
                 
                 logger.info("Successfully updated grid orders")
                 

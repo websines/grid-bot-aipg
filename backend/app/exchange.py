@@ -171,6 +171,20 @@ class Exchange:
             logger.error(f"Error getting filled orders: {str(e)}")
             return []
 
+    async def get_order_book(self, symbol: str = "aipg_usdt", limit: int = 5):
+        """Get order book for a symbol"""
+        try:
+            logger.info(f"Getting order book for {symbol}")
+            order_book = self.client.get_depth(
+                symbol=symbol.lower(),
+                limit=limit
+            )
+            logger.info(f"Order book response: {order_book}")
+            return order_book
+        except Exception as e:
+            logger.error(f"Error getting order book: {str(e)}")
+            return None
+
     async def create_grid(self, symbol: str, positions: int, total_amount: float, min_distance: float, max_distance: float):
         """Create a grid of buy and sell orders"""
         try:
