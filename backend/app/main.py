@@ -136,6 +136,14 @@ async def update_grid_orders():
                 # Calculate grid parameters
                 amount_per_grid = grid_state.total_amount / grid_state.positions
                 price_step = (grid_state.max_distance - grid_state.min_distance) / (grid_state.positions - 1)
+                min_profit_margin = 0.002  # 0.2% minimum profit margin
+                
+                # Get filled orders to determine position
+                filled_orders = await exchange.get_filled_orders(grid_state.symbol)
+                net_position = sum(
+                    float(order['quantity']) if order['side'] == 'BUY' else -float(order['quantity'])
+                    for order in filled_orders
+                )
                 
                 # Place new grid orders around current price
                 for i in range(grid_state.positions):
@@ -144,23 +152,25 @@ async def update_grid_orders():
                         
                         # Calculate buy and sell prices based on current market price
                         buy_price = current_price * (1 - distance / 100)
-                        sell_price = current_price * (1 + distance / 100)
+                        sell_price = buy_price * (1 + min_profit_margin)  # Ensure minimum profit margin
                         
-                        # Place buy order
-                        await exchange.place_grid_orders(
-                            symbol=grid_state.symbol,
-                            price=buy_price,
-                            quantity=amount_per_grid / buy_price,
-                            side='BUY'
-                        )
+                        # Only place buy orders if we have sold previously
+                        if net_position < 0:
+                            await exchange.place_grid_orders(
+                                symbol=grid_state.symbol,
+                                price=buy_price,
+                                quantity=amount_per_grid / buy_price,
+                                side='BUY'
+                            )
                         
-                        # Place sell order
-                        await exchange.place_grid_orders(
-                            symbol=grid_state.symbol,
-                            price=sell_price,
-                            quantity=amount_per_grid / sell_price,
-                            side='SELL'
-                        )
+                        # Only place sell orders if we have bought previously
+                        if net_position > 0:
+                            await exchange.place_grid_orders(
+                                symbol=grid_state.symbol,
+                                price=sell_price,
+                                quantity=amount_per_grid / sell_price,
+                                side='SELL'
+                            )
                         
                     except Exception as e:
                         logger.error(f"Error placing grid orders at level {i}: {str(e)}")

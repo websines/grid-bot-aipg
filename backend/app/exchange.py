@@ -156,6 +156,21 @@ class Exchange:
             logger.error(f"Error canceling all orders: {str(e)}")
             return False
 
+    async def get_filled_orders(self, symbol: str = "aipg_usdt"):
+        """Get filled orders for a symbol"""
+        try:
+            logger.info(f"Getting filled orders for {symbol}")
+            # Get orders with status "filled"
+            orders = self.client.get_orders(
+                symbol=symbol.lower(),
+                status="filled"
+            )
+            logger.info(f"Filled orders response: {orders}")
+            return orders
+        except Exception as e:
+            logger.error(f"Error getting filled orders: {str(e)}")
+            return []
+
     async def create_grid(self, symbol: str, positions: int, total_amount: float, min_distance: float, max_distance: float):
         """Create a grid of buy and sell orders"""
         try:
