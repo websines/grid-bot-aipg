@@ -68,7 +68,7 @@ export default function GridTradingBot() {
   const [balances, setBalances] = useState<Balance | null>(null);
   const [openOrders, setOpenOrders] = useState<Order[]>([]);
   const [gridParams, setGridParams] = useState<GridParams>({
-    symbol: 'BTCUSDT',
+    symbol: 'aipg_usdt',
     positions: 5,
     total_amount: 100,
     min_distance: 0.5,
